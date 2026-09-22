@@ -36,8 +36,8 @@ lib/
       tables.dart                    Task 2   (Notes, Tags, NoteTags drift tables)
       database.dart                  Task 2   (AppDb @DriftDatabase, connection)
       database_provider.dart         Task 2   (appDbProvider)
-      note_repository.dart           Task 4   (all DB queries; Task 9 adds tag sync)
-      note_repository_provider.dart  Task 4
+      note_repo.dart           Task 4   (all DB queries; Task 9 adds tag sync)
+      note_repo_provider.dart  Task 4
     router/
       app_router.dart                Task 3
     theme/
@@ -46,7 +46,7 @@ lib/
       date_format.dart               Task 6
   features/
     notes/
-      data/                          (empty marker — repository lives in core/db per single-DB design; delete this dir if you prefer)
+      data/                          (empty marker — repo lives in core/db per single-DB design; delete this dir if you prefer)
       ui/
         home_screen.dart             Task 5
         quick_dump_box.dart          Task 5
@@ -65,7 +65,7 @@ lib/
       ui/settings_screen.dart        Task 14
 test/
   core/db/database_test.dart         Task 2
-  core/db/note_repository_test.dart  Task 4, 9
+  core/db/note_repo_test.dart  Task 4, 9
   core/db/resurface_queries_test.dart Task 8
   features/notes/quick_dump_box_test.dart   Task 5
   features/notes/notes_list_screen_test.dart Task 6
@@ -150,7 +150,7 @@ void main() {
 
   test('inserts a note with defaults and reads it back', () async {
     final id = await db.into(db.notes).insert(
-          const NotesCompanion.insert(content: 'hello #world'),
+          NotesCompanion.insert(content: 'hello #world'),
         );
 
     final note = await (db.select(db.notes)..where((n) => n.id.equals(id))).getSingle();
@@ -164,9 +164,9 @@ void main() {
 
   test('note_tags cascade on note delete', () async {
     final noteId = await db.into(db.notes).insert(
-          const NotesCompanion.insert(content: 'n'),
+          NotesCompanion.insert(content: 'n'),
         );
-    final tagId = await db.into(db.tags).insert(const TagsCompanion.insert(name: 'a'));
+    final tagId = await db.into(db.tags).insert(TagsCompanion.insert(name: 'a'));
     await db.into(db.noteTags).insert(
           NoteTagsCompanion.insert(noteId: noteId, tagId: tagId),
         );
@@ -178,9 +178,9 @@ void main() {
   });
 
   test('tags name is unique', () async {
-    await db.into(db.tags).insert(const TagsCompanion.insert(name: 'dup'));
+    await db.into(db.tags).insert(TagsCompanion.insert(name: 'dup'));
     await expectLater(
-      db.into(db.tags).insert(const TagsCompanion.insert(name: 'dup')),
+      db.into(db.tags).insert(TagsCompanion.insert(name: 'dup')),
       throwsA(anything),
     );
   });
@@ -213,8 +213,10 @@ class Tags extends Table {
 }
 
 class NoteTags extends Table {
-  IntColumn get noteId => integer().references(Notes, #id)();
-  IntColumn get tagId => integer().references(Tags, #id)();
+  IntColumn get noteId =>
+      integer().references(Notes, #id, onDelete: KeyAction.cascade)();
+  IntColumn get tagId =>
+      integer().references(Tags, #id, onDelete: KeyAction.cascade)();
 
   @override
   Set<Column> get primaryKey => {noteId, tagId};
@@ -244,6 +246,15 @@ class AppDb extends _$AppDb {
 
   @override
   int get schemaVersion => 1;
+
+  // SQLite FK enforcement is OFF by default per connection — without this,
+  // the NoteTags cascade silently no-ops (orphan rows on note delete).
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        beforeOpen: (details) async {
+          await customStatement('PRAGMA foreign_keys = ON');
+        },
+      );
 }
 
 LazyDatabase _openConnection() {
@@ -328,7 +339,7 @@ import 'package:rembrain/features/settings/ui/settings_screen.dart';
 void main() {
   testWidgets('bottom nav switches between tabs', (tester) async {
     // in-memory DB: the router builds HomeScreen, which from Task 8 reads the
-    // repository — the real AppDb() would hit path_provider (no plugin in tests)
+    // repo — the real AppDb() would hit path_provider (no plugin in tests)
     final db = AppDb(NativeDatabase.memory());
     final container = ProviderContainer(overrides: [
       appDbProvider.overrideWithValue(db),
@@ -404,13 +415,13 @@ GoRouter appRouter(Ref ref) {
         builder: (context, state, shell) => ScaffoldWithNav(shell: shell),
         branches: [
           StatefulShellBranch(routes: [
-            GoRoute(path: '/', builder: (_, __) => const HomeScreen()),
+            GoRoute(path: '/', builder: (_, _) => const HomeScreen()),
           ]),
           StatefulShellBranch(routes: [
-            GoRoute(path: '/notes', builder: (_, __) => const NotesListScreen()),
+            GoRoute(path: '/notes', builder: (_, _) => const NotesListScreen()),
           ]),
           StatefulShellBranch(routes: [
-            GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
+            GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
           ]),
         ],
       ),
@@ -545,16 +556,16 @@ Expected: test passes, `No issues found!`
 
 ## Phase 1 — Dump + Notes list
 
-### Task 4: Note repository (data layer)
+### Task 4: Note repo (data layer)
 
 **Files:**
-- Create: `lib/core/db/note_repository.dart`
-- Create: `lib/core/db/note_repository_provider.dart`
-- Test: `test/core/db/note_repository_test.dart`
+- Create: `lib/core/db/note_repo.dart`
+- Create: `lib/core/db/note_repo_provider.dart`
+- Test: `test/core/db/note_repo_test.dart`
 
 **Interfaces:**
 - Consumes: `AppDb` schema (Task 2).
-- Produces: `NoteRepository` with exact signatures:
+- Produces: `NoteRepo` with exact signatures:
 
 ```dart
 Stream<List<Note>> watchNotes();                      // newest first
@@ -566,27 +577,27 @@ Future<void> setArchived(int id, bool archived);
 Future<Note> markResurfaced(int id);                  // count+1, set lastResurfacedAt=now, returns row
 ```
 
-plus `noteRepositoryProvider` (keepAlive).
+plus `noteRepoProvider` (keepAlive).
 
-> **Learn:** repository = your `Eloquent`-equivalent boundary. UI never touches `AppDb` directly, only this class — so phase 3's tag sync and a future AI hook have one place to live.
+> **Learn:** repo = your `Eloquent`-equivalent boundary. UI never touches `AppDb` directly, only this class — so phase 3's tag sync and a future AI hook have one place to live.
 
 - [ ] **Step 1: Write the failing test**
 
-`test/core/db/note_repository_test.dart`:
+`test/core/db/note_repo_test.dart`:
 
 ```dart
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rembrain/core/db/database.dart';
-import 'package:rembrain/core/db/note_repository.dart';
+import 'package:rembrain/core/db/note_repo.dart';
 
 void main() {
   late AppDb db;
-  late NoteRepository repo;
+  late NoteRepo repo;
 
   setUp(() {
     db = AppDb(NativeDatabase.memory());
-    repo = NoteRepository(db);
+    repo = NoteRepo(db);
   });
 
   tearDown(() async => db.close());
@@ -629,17 +640,17 @@ void main() {
 }
 ```
 
-- [ ] **Step 2: Implement repository**
+- [ ] **Step 2: Implement repo**
 
-`lib/core/db/note_repository.dart`:
+`lib/core/db/note_repo.dart`:
 
 ```dart
 import 'package:drift/drift.dart';
 
 import 'database.dart';
 
-class NoteRepository {
-  NoteRepository(this._db);
+class NoteRepo {
+  NoteRepo(this._db);
 
   final AppDb _db;
 
@@ -698,19 +709,19 @@ class NoteRepository {
 }
 ```
 
-`lib/core/db/note_repository_provider.dart`:
+`lib/core/db/note_repo_provider.dart`:
 
 ```dart
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import 'database_provider.dart';
-import 'note_repository.dart';
+import 'note_repo.dart';
 
-part 'note_repository_provider.g.dart';
+part 'note_repo_provider.g.dart';
 
 @Riverpod(keepAlive: true)
-NoteRepository noteRepository(Ref ref) =>
-    NoteRepository(ref.watch(appDbProvider));
+NoteRepo noteRepo(Ref ref) =>
+    NoteRepo(ref.watch(appDbProvider));
 ```
 
 - [ ] **Step 3: Codegen, tests, analyze**
@@ -733,7 +744,7 @@ Expected: all pass.
 - Test: `test/features/notes/quick_dump_box_test.dart`
 
 **Interfaces:**
-- Consumes: `noteRepositoryProvider` (Task 4).
+- Consumes: `noteRepoProvider` (Task 4).
 - Produces:
   - `@riverpod Stream<List<Note>> notesList(Ref ref)` → `notesListProvider`
   - `QuickDumpBox` widget — multiline field + send IconBtn; on insert success clears field + shows snackbar "dumped"; on failure shows error snackbar and KEEPS text.
@@ -751,15 +762,15 @@ import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rembrain/core/db/database.dart';
 import 'package:rembrain/core/db/database_provider.dart';
-import 'package:rembrain/core/db/note_repository.dart';
-import 'package:rembrain/core/db/note_repository_provider.dart';
+import 'package:rembrain/core/db/note_repo.dart';
+import 'package:rembrain/core/db/note_repo_provider.dart';
 
 AppDb makeTestDb() => AppDb(NativeDatabase.memory());
 
 ProviderContainer makeContainer(AppDb db) {
   final container = ProviderContainer(overrides: [
     appDbProvider.overrideWithValue(db),
-    noteRepositoryProvider.overrideWithValue(NoteRepository(db)),
+    noteRepoProvider.overrideWithValue(NoteRepo(db)),
   ]);
   return container;
 }
@@ -832,13 +843,13 @@ void main() {
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/db/database.dart';
-import '../../core/db/note_repository_provider.dart';
+import '../../core/db/note_repo_provider.dart';
 
 part 'notes_providers.g.dart';
 
 @riverpod
 Stream<List<Note>> notesList(Ref ref) =>
-    ref.watch(noteRepositoryProvider).watchNotes();
+    ref.watch(noteRepoProvider).watchNotes();
 ```
 
 `lib/features/notes/ui/quick_dump_box.dart`:
@@ -847,7 +858,7 @@ Stream<List<Note>> notesList(Ref ref) =>
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/db/note_repository_provider.dart';
+import '../../../core/db/note_repo_provider.dart';
 
 class QuickDumpBox extends ConsumerStatefulWidget {
   const QuickDumpBox({super.key});
@@ -871,7 +882,7 @@ class _QuickDumpBoxState extends ConsumerState<QuickDumpBox> {
     if (content.isEmpty || _sending) return;
     setState(() => _sending = true);
     try {
-      await ref.read(noteRepositoryProvider).insertNote(content);
+      await ref.read(noteRepoProvider).insertNote(content);
       _controller.clear();
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -972,8 +983,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rembrain/core/db/database.dart';
 import 'package:rembrain/core/db/database_provider.dart';
-import 'package:rembrain/core/db/note_repository.dart';
-import 'package:rembrain/core/db/note_repository_provider.dart';
+import 'package:rembrain/core/db/note_repo.dart';
+import 'package:rembrain/core/db/note_repo_provider.dart';
 import 'package:rembrain/features/notes/ui/notes_list_screen.dart';
 
 void main() {
@@ -981,11 +992,11 @@ void main() {
 
   testWidgets('renders seeded notes, live-updates on insert', (tester) async {
     final db = AppDb(NativeDatabase.memory());
-    final repo = NoteRepository(db);
+    final repo = NoteRepo(db);
     await repo.insertNote('alpha note');
     final container = ProviderContainer(overrides: [
       appDbProvider.overrideWithValue(db),
-      noteRepositoryProvider.overrideWithValue(repo),
+      noteRepoProvider.overrideWithValue(repo),
     ]);
     addTearDown(() async {
       container.dispose();
@@ -1011,7 +1022,7 @@ void main() {
     final db = AppDb(NativeDatabase.memory());
     final container = ProviderContainer(overrides: [
       appDbProvider.overrideWithValue(db),
-      noteRepositoryProvider.overrideWithValue(NoteRepository(db)),
+      noteRepoProvider.overrideWithValue(NoteRepo(db)),
     ]);
     addTearDown(() async {
       container.dispose();
@@ -1241,20 +1252,20 @@ Expected: all pass.
 ### Task 8: Resurface provider + card on Home
 
 **Files:**
-- Modify: `lib/core/db/note_repository.dart` (add `resurfaceCandidates()`)
+- Modify: `lib/core/db/note_repo.dart` (add `resurfaceCandidates()`)
 - Create: `lib/features/resurface/resurface_providers.dart`
 - Create: `lib/features/resurface/ui/resurface_card.dart`
 - Modify: `lib/features/notes/ui/home_screen.dart` (add card above dump box)
 - Test: `test/core/db/resurface_queries_test.dart`, `test/features/resurface/resurface_card_test.dart`
 
 **Interfaces:**
-- Consumes: `pickWeighted` (Task 7), `NoteRepository` (Task 4).
+- Consumes: `pickWeighted` (Task 7), `NoteRepo` (Task 4).
 - Produces:
-  - `NoteRepository.resurfaceCandidates()` → `Future<List<Note>>`: non-archived, excluding the most-recently-resurfaced note (if any).
+  - `NoteRepo.resurfaceCandidates()` → `Future<List<Note>>`: non-archived, excluding the most-recently-resurfaced note (if any).
   - `@riverpod Future<Note?> resurfacePick(Ref ref)` → `resurfacePickProvider`: picks one via `pickWeighted`, marks it resurfaced, null when no candidates. One-shot per watch — NOT a stream — so marking a note resurfaced cannot re-trigger the pick (spec: one resurface per app open; Keep flag hides the card afterwards anyway).
   - `ResurfaceCard` widget: shows content preview + `daysAgoLabel`; actions **Keep** (dismisses card this session — `resurfaceDismissedProvider` flag in `resurface_providers.dart`), **Archive** (calls `setArchived(id, true)`), **Forget** (confirm dialog → `deleteNote(id)`).
 
-- [ ] **Step 1: Failing repository test**
+- [ ] **Step 1: Failing repo test**
 
 `test/core/db/resurface_queries_test.dart`:
 
@@ -1262,15 +1273,15 @@ Expected: all pass.
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rembrain/core/db/database.dart';
-import 'package:rembrain/core/db/note_repository.dart';
+import 'package:rembrain/core/db/note_repo.dart';
 
 void main() {
   late AppDb db;
-  late NoteRepository repo;
+  late NoteRepo repo;
 
   setUp(() {
     db = AppDb(NativeDatabase.memory());
-    repo = NoteRepository(db);
+    repo = NoteRepo(db);
   });
 
   tearDown(() async => db.close());
@@ -1308,7 +1319,7 @@ void main() {
 }
 ```
 
-- [ ] **Step 2: Implement `resurfaceCandidates`** (append to `NoteRepository`):
+- [ ] **Step 2: Implement `resurfaceCandidates`** (append to `NoteRepo`):
 
 ```dart
   Future<List<Note>> resurfaceCandidates() async {
@@ -1343,7 +1354,7 @@ import 'dart:math';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/db/database.dart';
-import '../../core/db/note_repository_provider.dart';
+import '../../core/db/note_repo_provider.dart';
 import 'resurface_logic.dart';
 
 part 'resurface_providers.g.dart';
@@ -1354,7 +1365,7 @@ part 'resurface_providers.g.dart';
 @riverpod
 Future<Note?> resurfacePick(Ref ref) async {
   final candidates =
-      await ref.watch(noteRepositoryProvider).resurfaceCandidates();
+      await ref.watch(noteRepoProvider).resurfaceCandidates();
   if (candidates.isEmpty) return null;
 
   final pick = pickWeighted(
@@ -1363,7 +1374,7 @@ Future<Note?> resurfacePick(Ref ref) async {
     DateTime.now(),
     Random(),
   );
-  await ref.read(noteRepositoryProvider).markResurfaced(pick.id);
+  await ref.read(noteRepoProvider).markResurfaced(pick.id);
   return pick;
 }
 
@@ -1429,7 +1440,7 @@ class ResurfaceCard extends ConsumerWidget {
                     OutlinedButton(
                       onPressed: () async {
                         await ref
-                            .read(noteRepositoryProvider)
+                            .read(noteRepoProvider)
                             .setArchived(note.id, true);
                         ref.read(resurfaceDismissedProvider.notifier).dismiss();
                       },
@@ -1470,7 +1481,7 @@ class ResurfaceCard extends ConsumerWidget {
       ),
     );
     if (confirmed == true) {
-      await ref.read(noteRepositoryProvider).deleteNote(id);
+      await ref.read(noteRepoProvider).deleteNote(id);
       ref.read(resurfaceDismissedProvider.notifier).dismiss();
     }
   }
@@ -1516,18 +1527,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rembrain/core/db/database.dart';
 import 'package:rembrain/core/db/database_provider.dart';
-import 'package:rembrain/core/db/note_repository.dart';
-import 'package:rembrain/core/db/note_repository_provider.dart';
+import 'package:rembrain/core/db/note_repo.dart';
+import 'package:rembrain/core/db/note_repo_provider.dart';
 import 'package:rembrain/features/resurface/ui/resurface_card.dart';
 
 void main() {
   Future<(AppDb, ProviderContainer)> setup(WidgetTester tester) async {
     final db = AppDb(NativeDatabase.memory());
-    final repo = NoteRepository(db);
+    final repo = NoteRepo(db);
     await repo.insertNote('old thought');
     final container = ProviderContainer(overrides: [
       appDbProvider.overrideWithValue(db),
-      noteRepositoryProvider.overrideWithValue(repo),
+      noteRepoProvider.overrideWithValue(repo),
     ]);
     await tester.pumpWidget(
       UncontrolledProviderScope(
@@ -1584,7 +1595,7 @@ void main() {
 
   testWidgets('archive hides note from candidates and dismisses', (tester) async {
     final (db, container) = await setup(tester);
-    final repo = NoteRepository(db);
+    final repo = NoteRepo(db);
     addTearDown(() async {
       container.dispose();
       await db.close();
@@ -1619,13 +1630,13 @@ Expected: all green. Device: seed nothing → no card; dump a note → restart a
 
 **Files:**
 - Create: `lib/features/notes/data/tag_util.dart`
-- Modify: `lib/core/db/note_repository.dart` (tag sync inside `insertNote`/`updateNote` via shared `_syncTags`)
-- Test: `test/features/notes/tag_util_test.dart`, extend `test/core/db/note_repository_test.dart`
+- Modify: `lib/core/db/note_repo.dart` (tag sync inside `insertNote`/`updateNote` via shared `_syncTags`)
+- Test: `test/features/notes/tag_util_test.dart`, extend `test/core/db/note_repo_test.dart`
 
 **Interfaces:**
 - Produces:
   - `Set<String> parseTags(String content)` — `#` + `[a-zA-Z0-9_]{1,32}`, lowercased, deduped; `#` alone / trailing `#` ignored.
-  - Repository behavior change: `insertNote`/`updateNote` now also sync tags from content (create tags on demand, link, prune orphan tags with zero notes). Same signatures as Task 4 — callers unaffected.
+  - Repo behavior change: `insertNote`/`updateNote` now also sync tags from content (create tags on demand, link, prune orphan tags with zero notes). Same signatures as Task 4 — callers unaffected.
 
 > **Learn:** spec decision made concrete — hashtags inline in content, no tag picker at dump time. Content stored verbatim; parsing is derived data.
 
@@ -1671,7 +1682,7 @@ Set<String> parseTags(String content) =>
     _tagRegex.allMatches(content).map((m) => m.group(1)!.toLowerCase()).toSet();
 ```
 
-- [ ] **Step 3: Failing repository tests** (append to `test/core/db/note_repository_test.dart`):
+- [ ] **Step 3: Failing repo tests** (append to `test/core/db/note_repo_test.dart`):
 
 ```dart
   test('insertNote syncs tags from content', () async {
@@ -1710,13 +1721,13 @@ Set<String> parseTags(String content) =>
   });
 ```
 
-Add to `NoteRepository` interface now (test references it):
+Add to `NoteRepo` interface now (test references it):
 
 ```dart
 Future<List<Tag>> tagsForNote(int noteId);
 ```
 
-- [ ] **Step 4: Implement sync in repository** (modify `note_repository.dart` — add to imports):
+- [ ] **Step 4: Implement sync in repo** (modify `note_repo.dart` — add to imports):
 
 ```dart
 import 'package:rembrain/features/notes/data/tag_util.dart';
@@ -1816,18 +1827,18 @@ Expected: green. Device: dump `learned #flutter today` → snackbar; note saved 
 - Create: `lib/features/notes/ui/tag_chip.dart`
 - Modify: `lib/features/notes/notes_providers.dart` (filtered list)
 - Modify: `lib/features/notes/ui/notes_list_screen.dart` (search field + filter chips)
-- Modify: `lib/core/db/note_repository.dart` (add `watchTags()`, filtered `watchNotes`)
+- Modify: `lib/core/db/note_repo.dart` (add `watchTags()`, filtered `watchNotes`)
 - Test: extend `test/features/notes/notes_list_screen_test.dart`
 
 **Interfaces:**
 - Produces:
   - `TagChip` — small rounded chip, label only.
-  - `NoteRepository.watchTags()` → `Stream<List<Tag>>`; `watchNotes({String? search, int? tagId})` — search = LIKE on content+title, tagId filters by link.
+  - `NoteRepo.watchTags()` → `Stream<List<Tag>>`; `watchNotes({String? search, int? tagId})` — search = LIKE on content+title, tagId filters by link.
   - `@riverpod Stream<List<Tag>> tags(Ref ref)` → `tagsProvider`
   - `@riverpod class NotesFilter extends _$NotesFilter` → state `{String search; int? tagId}` (record or small class — use a record `(String, int?)` for simplicity), methods `setSearch`, `toggleTag`.
   - `@riverpod Stream<List<Note>> filteredNotes(Ref ref)` → `filteredNotesProvider` (Notes list screen switches to this; the old `notesListProvider` from Task 5 is deleted — filtered with empty filter is the same query).
 
-- [ ] **Step 1: Failing repository test** (append to `test/core/db/note_repository_test.dart`):
+- [ ] **Step 1: Failing repo test** (append to `test/core/db/note_repo_test.dart`):
 
 ```dart
   test('watchNotes filters by search and tag', () async {
@@ -1849,7 +1860,7 @@ Expected: green. Device: dump `learned #flutter today` → snackbar; note saved 
   });
 ```
 
-- [ ] **Step 2: Implement repository additions**
+- [ ] **Step 2: Implement repo additions**
 
 ```dart
   Stream<List<Tag>> watchTags() =>
@@ -1893,12 +1904,12 @@ Expected: green. Device: dump `learned #flutter today` → snackbar; note saved 
 ```dart
   testWidgets('filter chips and search narrow the list', (tester) async {
     final db = AppDb(NativeDatabase.memory());
-    final repo = NoteRepository(db);
+    final repo = NoteRepo(db);
     await repo.insertNote('flutter thing #flutter');
     await repo.insertNote('drift thing #drift');
     final container = ProviderContainer(overrides: [
       appDbProvider.overrideWithValue(db),
-      noteRepositoryProvider.overrideWithValue(repo),
+      noteRepoProvider.overrideWithValue(repo),
     ]);
     addTearDown(() async {
       container.dispose();
@@ -1963,12 +1974,12 @@ class TagChip extends StatelessWidget {
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/db/database.dart';
-import '../../core/db/note_repository_provider.dart';
+import '../../core/db/note_repo_provider.dart';
 
 part 'notes_providers.g.dart';
 
 @riverpod
-Stream<List<Tag>> tags(Ref ref) => ref.watch(noteRepositoryProvider).watchTags();
+Stream<List<Tag>> tags(Ref ref) => ref.watch(noteRepoProvider).watchTags();
 
 typedef NotesFilterState = ({String search, int? tagId});
 
@@ -1986,7 +1997,7 @@ class NotesFilter extends _$NotesFilter {
 Stream<List<Note>> filteredNotes(Ref ref) {
   final filter = ref.watch(notesFilterProvider);
   return ref
-      .watch(noteRepositoryProvider)
+      .watch(noteRepoProvider)
       .watchNotes(search: filter.search, tagId: filter.tagId);
 }
 ```
@@ -2029,7 +2040,7 @@ class NotesListScreen extends ConsumerWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: tagsAsync.when(
               loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
+              error: (_, _) => const SizedBox.shrink(),
               data: (tags) => Wrap(
                 spacing: 4,
                 runSpacing: 4,
@@ -2088,7 +2099,7 @@ flutter analyze
 - Test: new `test/features/notes/note_detail_screen_test.dart` (detail body + tap-navigates)
 
 **Interfaces:**
-- Consumes: `NoteRepository.watchNote` (Task 4), `tagsForNote` (Task 9).
+- Consumes: `NoteRepo.watchNote` (Task 4), `tagsForNote` (Task 9).
 - Produces: route `/notes/:id` → `NoteDetailScreen`; `@riverpod Stream<Note?> noteById(Ref ref, int id)` → family provider `noteByIdProvider(id)`; detail screen shows full content, tag chips (static), `daysAgoLabel(createdAt)`, and (Task 12) edit / archive / delete actions in the AppBar.
 
 - [ ] **Step 1: Failing test** (new file `test/features/notes/note_detail_screen_test.dart`):
@@ -2100,19 +2111,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rembrain/core/db/database.dart';
 import 'package:rembrain/core/db/database_provider.dart';
-import 'package:rembrain/core/db/note_repository.dart';
-import 'package:rembrain/core/db/note_repository_provider.dart';
+import 'package:rembrain/core/db/note_repo.dart';
+import 'package:rembrain/core/db/note_repo_provider.dart';
 import 'package:rembrain/core/router/app_router.dart';
 import 'package:rembrain/features/notes/ui/note_detail_screen.dart';
 
 void main() {
   testWidgets('shows content and tags of the note', (tester) async {
     final db = AppDb(NativeDatabase.memory());
-    final repo = NoteRepository(db);
+    final repo = NoteRepo(db);
     final note = await repo.insertNote('full body text #dart #drift');
     final container = ProviderContainer(overrides: [
       appDbProvider.overrideWithValue(db),
-      noteRepositoryProvider.overrideWithValue(repo),
+      noteRepoProvider.overrideWithValue(repo),
     ]);
     addTearDown(() async {
       container.dispose();
@@ -2137,11 +2148,11 @@ void main() {
 
   testWidgets('tapping a note card navigates to detail', (tester) async {
     final db = AppDb(NativeDatabase.memory());
-    final repo = NoteRepository(db);
+    final repo = NoteRepo(db);
     await repo.insertNote('tappable note');
     final container = ProviderContainer(overrides: [
       appDbProvider.overrideWithValue(db),
-      noteRepositoryProvider.overrideWithValue(repo),
+      noteRepoProvider.overrideWithValue(repo),
     ]);
     addTearDown(() async {
       container.dispose();
@@ -2176,7 +2187,7 @@ Add to `notes_providers.dart`:
 ```dart
 @riverpod
 Stream<Note?> noteById(Ref ref, int id) =>
-    ref.watch(noteRepositoryProvider).watchNote(id);
+    ref.watch(noteRepoProvider).watchNote(id);
 ```
 
 Add to `app_router.dart` inside the `/notes` branch routes (before closing bracket of that GoRoute's routes list — convert the notes branch route to use `routes:`):
@@ -2185,7 +2196,7 @@ Add to `app_router.dart` inside the `/notes` branch routes (before closing brack
           StatefulShellBranch(routes: [
             GoRoute(
               path: '/notes',
-              builder: (_, __) => const NotesListScreen(),
+              builder: (_, _) => const NotesListScreen(),
               routes: [
                 GoRoute(
                   path: ':id',
@@ -2233,7 +2244,7 @@ class NoteDetailScreen extends ConsumerWidget {
             return const Center(child: Text('note not found'));
           }
           return FutureBuilder<List<Tag>>(
-            future: ref.read(noteRepositoryProvider).tagsForNote(note.id),
+            future: ref.read(noteRepoProvider).tagsForNote(note.id),
             builder: (context, snapshot) {
               final tags = snapshot.data ?? const <Tag>[];
               return Padding(
@@ -2302,7 +2313,7 @@ flutter analyze
 - Test: `test/features/notes/note_edit_screen_test.dart`
 
 **Interfaces:**
-- Consumes: `noteByIdProvider`, `NoteRepository.updateNote`, `parseTags`.
+- Consumes: `noteByIdProvider`, `NoteRepo.updateNote`, `parseTags`.
 - Produces: `NoteEditScreen({required int noteId})` — edit-only. Create happens via the dump box on Home (spec §4's Create screen is subsumed). Fields: title (optional), content (required, 1–10000 chars). Live `Wrap` of `TagChip`s previewing `parseTags(content)`. Save → repo call → `context.pop()`. Validation errors inline under fields.
 
 - [ ] **Step 1: Failing test**
@@ -2317,18 +2328,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:rembrain/core/db/database.dart';
 import 'package:rembrain/core/db/database_provider.dart';
-import 'package:rembrain/core/db/note_repository.dart';
-import 'package:rembrain/core/db/note_repository_provider.dart';
+import 'package:rembrain/core/db/note_repo.dart';
+import 'package:rembrain/core/db/note_repo_provider.dart';
 import 'package:rembrain/features/notes/ui/note_edit_screen.dart';
 
 void main() {
   testWidgets('prefills, validates, updates, pops on save', (tester) async {
     final db = AppDb(NativeDatabase.memory());
-    final repo = NoteRepository(db);
+    final repo = NoteRepo(db);
     final note = await repo.insertNote('original');
     final container = ProviderContainer(overrides: [
       appDbProvider.overrideWithValue(db),
-      noteRepositoryProvider.overrideWithValue(repo),
+      noteRepoProvider.overrideWithValue(repo),
     ]);
     addTearDown(() async {
       container.dispose();
@@ -2342,11 +2353,11 @@ void main() {
       routes: [
         GoRoute(
           path: '/notes/:id',
-          builder: (_, __) => const Scaffold(body: Text('back on detail')),
+          builder: (_, _) => const Scaffold(body: Text('back on detail')),
           routes: [
             GoRoute(
               path: 'edit',
-              builder: (_, __) => NoteEditScreen(noteId: note.id),
+              builder: (_, _) => NoteEditScreen(noteId: note.id),
             ),
           ],
         ),
@@ -2394,7 +2405,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../core/db/note_repository_provider.dart';
+import '../../../core/db/note_repo_provider.dart';
 import '../data/tag_util.dart';
 import '../notes_providers.dart';
 import 'tag_chip.dart';
@@ -2423,7 +2434,7 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
 
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    final repo = ref.read(noteRepositoryProvider);
+    final repo = ref.read(noteRepoProvider);
     final content = _contentController.text.trim();
     final title =
         _titleController.text.trim().isEmpty ? null : _titleController.text.trim();
@@ -2545,7 +2556,7 @@ flutter analyze
 - Test: extend `test/features/notes/note_detail_screen_test.dart`
 
 **Interfaces:**
-- Consumes: `NoteRepository.setArchived`, `deleteNote` (Task 4).
+- Consumes: `NoteRepo.setArchived`, `deleteNote` (Task 4).
 - Produces: AppBar overflow menu on detail: **Archive/Unarchive** (label depends on `isArchived`), **Delete** (confirm dialog "delete this note forever?" → `deleteNote` → `context.pop()` to list). Archived notes show an `archived` badge on detail + note card subtitle suffix.
 
 - [ ] **Step 1: Failing test** (append to `note_detail_screen_test.dart`; add `import 'package:go_router/go_router.dart';` to that file):
@@ -2553,11 +2564,11 @@ flutter analyze
 ```dart
   testWidgets('delete requires confirm then pops', (tester) async {
     final db = AppDb(NativeDatabase.memory());
-    final repo = NoteRepository(db);
+    final repo = NoteRepo(db);
     final note = await repo.insertNote('doomed');
     final container = ProviderContainer(overrides: [
       appDbProvider.overrideWithValue(db),
-      noteRepositoryProvider.overrideWithValue(repo),
+      noteRepoProvider.overrideWithValue(repo),
     ]);
     addTearDown(() async {
       container.dispose();
@@ -2571,7 +2582,7 @@ flutter analyze
       routes: [
         GoRoute(
           path: '/notes',
-          builder: (_, __) => const Scaffold(body: Text('back on list')),
+          builder: (_, _) => const Scaffold(body: Text('back on list')),
         ),
         GoRoute(
           path: '/notes/:id',
@@ -2607,11 +2618,11 @@ flutter analyze
 
   testWidgets('archive toggles and badge shows', (tester) async {
     final db = AppDb(NativeDatabase.memory());
-    final repo = NoteRepository(db);
+    final repo = NoteRepo(db);
     final note = await repo.insertNote('to archive');
     final container = ProviderContainer(overrides: [
       appDbProvider.overrideWithValue(db),
-      noteRepositoryProvider.overrideWithValue(repo),
+      noteRepoProvider.overrideWithValue(repo),
     ]);
     addTearDown(() async {
       container.dispose();
@@ -2652,7 +2663,7 @@ flutter analyze
               switch (action) {
                 case 'archive':
                   await ref
-                      .read(noteRepositoryProvider)
+                      .read(noteRepoProvider)
                       .setArchived(note.id, !note.isArchived);
                 case 'delete':
                   final confirmed = await showDialog<bool>(
@@ -2675,7 +2686,7 @@ flutter analyze
                     ),
                   );
                   if (confirmed == true && context.mounted) {
-                    await ref.read(noteRepositoryProvider).deleteNote(note.id);
+                    await ref.read(noteRepoProvider).deleteNote(note.id);
                     if (context.mounted) context.pop();
                   }
               }
