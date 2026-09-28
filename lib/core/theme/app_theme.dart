@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-part 'app_theme.g.dart';
+final darkThemeProvider = Provider<ThemeData>(
+  (ref) => ThemeData(useMaterial3: true, brightness: Brightness.dark),
+);
 
-@riverpod
-ThemeData darkTheme(Ref ref) =>
-    ThemeData(useMaterial3: true, brightness: Brightness.dark);
-
-@riverpod
-ThemeData lightTheme(Ref ref) =>
-    ThemeData(useMaterial3: true, brightness: Brightness.light);
+final lightThemeProvider = Provider<ThemeData>(
+  (ref) => ThemeData(useMaterial3: true, brightness: Brightness.light),
+);

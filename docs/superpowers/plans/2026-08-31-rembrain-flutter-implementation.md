@@ -8,7 +8,7 @@
 
 **Architecture:** Feature-first, 2 layers (`data/` + `ui/`, no domain layer). drift (SQLite) is the single source of truth; `watch()` streams push changes into Riverpod StreamProviders which feed the UI. Pure logic (tag parsing, weighted pick) lives in plain Dart functions, unit-tested without Flutter.
 
-**Tech Stack:** Flutter 3.47 / Dart 3.13, flutter_riverpod + riverpod_annotation (codegen), drift + drift_dev (codegen), go_router, shared_preferences.
+**Tech Stack:** Flutter 3.47 / Dart 3.13, flutter_riverpod (manual providers — no riverpod_generator, see Deviations), drift + drift_dev (codegen), go_router, shared_preferences.
 
 ## Global Constraints
 
@@ -20,7 +20,7 @@
 - Material 3, dark-first theme.
 - Tap targets ≥ 44px; primary actions thumb-reachable; no horizontal scroll at 375px.
 - Schema reserves `aiTitle` / `aiContent` columns now (nullable, unused) — AI phase must not need a migration.
-- Codegen: run `dart run build_runner build --delete-conflicting-outputs` after any change to drift tables or `@riverpod` functions. Never hand-edit `.g.dart` files.
+- Codegen: run `dart run build_runner build` after any change to drift tables. Never hand-edit `.g.dart` files. Only drift uses codegen — providers are hand-written (see Deviations).
 - Every task ends green: `flutter analyze` → "No issues found!", `flutter test` → "All tests passed!".
 - drift stores `DateTime` as unix **seconds**. Two writes in the same second share a timestamp: every `createdAt`/`lastResurfacedAt` ordering needs an `id` tiebreaker, and tests must never assert sub-second timestamp deltas.
 - **No commits. The human commits when they choose.**
@@ -55,7 +55,7 @@ lib/
         note_detail_screen.dart      Task 11
         note_edit_screen.dart        Task 12
         tag_chip.dart                Task 10
-      notes_providers.dart           Task 5   (final: filteredNotes, tags, notesFilter, noteById)
+      notes_provider.dart           Task 5   (final: filteredNotes, tags, notesFilter, noteById)
     resurface/
       resurface_logic.dart           Task 7   (pure weighted pick)
       resurface_providers.dart       Task 8
@@ -91,12 +91,12 @@ lib/features/notes/data/tag_util.dart  Task 9  (pure tag parsing)
 - Modify: `pubspec.yaml` (via flutter pub add — do not hand-edit versions)
 
 **Interfaces:**
-- Produces: a project where `dart run build_runner build --delete-conflicting-outputs` works and all later task versions resolve.
+- Produces: a project where `dart run build_runner build` works and all later task versions resolve.
 
 - [ ] **Step 1: Add runtime dependencies**
 
 ```bash
-flutter pub add flutter_riverpod riverpod_annotation go_router drift sqlite3_flutter_libs path_provider path shared_preferences
+flutter pub add flutter_riverpod go_router drift sqlite3_flutter_libs path_provider path shared_preferences
 ```
 
 Expected: pubspec.yaml updated, `flutter pub get` runs clean.
@@ -104,7 +104,7 @@ Expected: pubspec.yaml updated, `flutter pub get` runs clean.
 - [ ] **Step 2: Add dev dependencies**
 
 ```bash
-flutter pub add -d riverpod_generator drift_dev build_runner
+flutter pub add -d drift_dev build_runner
 ```
 
 - [ ] **Step 3: Verify toolchain**
@@ -269,18 +269,15 @@ LazyDatabase _openConnection() {
 `lib/core/db/database_provider.dart`:
 
 ```dart
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'database.dart';
 
-part 'database_provider.g.dart';
-
-@Riverpod(keepAlive: true)
-AppDb appDb(Ref ref) {
+final appDbProvider = Provider<AppDb>((ref) {
   final db = AppDb();
   ref.onDispose(db.close);
   return db;
-}
+});
 ```
 
 > In tests we construct `AppDb(NativeDatabase.memory())` directly and override `appDbProvider` — the `_openConnection()` file path is only used by the default constructor in `main.dart`.
@@ -288,10 +285,10 @@ AppDb appDb(Ref ref) {
 - [ ] **Step 3: Run codegen**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
+dart run build_runner build
 ```
 
-Expected: succeeds, generates `database.g.dart` and `database_provider.g.dart`. If it reports errors in the test file about missing names, that's expected until generation completes — rerun analyze after.
+Expected: succeeds, generates `database.g.dart`. If it reports errors in the test file about missing names, that's expected until generation completes — rerun analyze after.
 
 - [ ] **Step 4: Run tests**
 
@@ -379,34 +376,29 @@ void main() {
 
 ```dart
 import 'package:flutter/material.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-part 'app_theme.g.dart';
+final darkThemeProvider =
+    Provider<ThemeData>((ref) => ThemeData(useMaterial3: true, brightness: Brightness.dark));
 
-@riverpod
-ThemeData darkTheme(Ref ref) => ThemeData(useMaterial3: true, brightness: Brightness.dark);
-
-@riverpod
-ThemeData lightTheme(Ref ref) => ThemeData(useMaterial3: true, brightness: Brightness.light);
+final lightThemeProvider =
+    Provider<ThemeData>((ref) => ThemeData(useMaterial3: true, brightness: Brightness.light));
 ```
 
 `lib/core/router/app_router.dart`:
 
 ```dart
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../features/notes/ui/home_screen.dart';
 import '../../features/notes/ui/notes_list_screen.dart';
 import '../../features/settings/ui/settings_screen.dart';
 
-part 'app_router.g.dart';
-
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 
-@Riverpod(keepAlive: true)
-GoRouter appRouter(Ref ref) {
+final appRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
     initialLocation: '/',
@@ -427,7 +419,7 @@ GoRouter appRouter(Ref ref) {
       ),
     ],
   );
-}
+});
 
 class ScaffoldWithNav extends StatelessWidget {
   const ScaffoldWithNav({super.key, required this.shell});
@@ -540,10 +532,9 @@ void main() {
 }
 ```
 
-- [ ] **Step 3: Codegen + tests + analyze**
+- [ ] **Step 3: Tests + analyze**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
 flutter test test/features/notes/notes_list_screen_test.dart
 flutter analyze
 ```
@@ -712,22 +703,17 @@ class NoteRepo {
 `lib/core/db/note_repo_provider.dart`:
 
 ```dart
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'database_provider.dart';
 import 'note_repo.dart';
 
-part 'note_repo_provider.g.dart';
-
-@Riverpod(keepAlive: true)
-NoteRepo noteRepo(Ref ref) =>
-    NoteRepo(ref.watch(appDbProvider));
+final noteRepoProvider = Provider<NoteRepo>((ref) => NoteRepo(ref.watch(appDbProvider)));
 ```
 
-- [ ] **Step 3: Codegen, tests, analyze**
+- [ ] **Step 3: Tests, analyze**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
 flutter test test/core/db/
 flutter analyze
 ```
@@ -737,7 +723,7 @@ Expected: all pass.
 ### Task 5: Quick dump box + Home screen + notes list provider
 
 **Files:**
-- Create: `lib/features/notes/notes_providers.dart`
+- Create: `lib/features/notes/notes_provider.dart`
 - Create: `lib/features/notes/ui/quick_dump_box.dart`
 - Modify: `lib/features/notes/ui/home_screen.dart` (real body)
 - Test: `test/helpers.dart`
@@ -746,7 +732,7 @@ Expected: all pass.
 **Interfaces:**
 - Consumes: `noteRepoProvider` (Task 4).
 - Produces:
-  - `@riverpod Stream<List<Note>> notesList(Ref ref)` → `notesListProvider`
+  - `StreamProvider<List<Note>> noteListProvider` (manual provider — reads `noteRepoProvider.watchNotes()`)
   - `QuickDumpBox` widget — multiline field + send IconBtn; on insert success clears field + shows snackbar "dumped"; on failure shows error snackbar and KEEPS text.
   - `HomeScreen` = `QuickDumpBox` at top (SafeArea, padding 16).
   - `test/helpers.dart` → `ProviderContainer makeContainer(AppDb db)` helper used by all widget tests from now on.
@@ -837,19 +823,17 @@ void main() {
 
 - [ ] **Step 2: Implement provider + widget + screen**
 
-`lib/features/notes/notes_providers.dart`:
+`lib/features/notes/notes_provider.dart`:
 
 ```dart
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/db/note_repo_provider.dart';
 
-part 'notes_providers.g.dart';
-
-@riverpod
-Stream<List<Note>> notesList(Ref ref) =>
-    ref.watch(noteRepoProvider).watchNotes();
+final noteListProvider = StreamProvider<List<Note>>((ref) {
+  return ref.watch(noteRepoProvider).watchNotes();
+});
 ```
 
 `lib/features/notes/ui/quick_dump_box.dart`:
@@ -953,10 +937,9 @@ class HomeScreen extends StatelessWidget {
 }
 ```
 
-- [ ] **Step 3: Codegen, tests, analyze, device check**
+- [ ] **Step 3: Tests, analyze, device check**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
 flutter test test/features/notes/quick_dump_box_test.dart
 flutter analyze
 ```
@@ -1093,7 +1076,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'note_card.dart';
-import '../notes_providers.dart';
+import '../notes_provider.dart';
 
 class NotesListScreen extends ConsumerWidget {
   const NotesListScreen({super.key});
@@ -1121,7 +1104,6 @@ class NotesListScreen extends ConsumerWidget {
 - [ ] **Step 3: Run tests + analyze**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
 flutter test test/features/notes/notes_list_screen_test.dart
 flutter analyze
 ```
@@ -1262,7 +1244,7 @@ Expected: all pass.
 - Consumes: `pickWeighted` (Task 7), `NoteRepo` (Task 4).
 - Produces:
   - `NoteRepo.resurfaceCandidates()` → `Future<List<Note>>`: non-archived, excluding the most-recently-resurfaced note (if any).
-  - `@riverpod Future<Note?> resurfacePick(Ref ref)` → `resurfacePickProvider`: picks one via `pickWeighted`, marks it resurfaced, null when no candidates. One-shot per watch — NOT a stream — so marking a note resurfaced cannot re-trigger the pick (spec: one resurface per app open; Keep flag hides the card afterwards anyway).
+  - `FutureProvider.autoDispose<Note?> resurfacePickProvider`: picks one via `pickWeighted`, marks it resurfaced, null when no candidates. One-shot per watch — NOT a stream — so marking a note resurfaced cannot re-trigger the pick (spec: one resurface per app open; Keep flag hides the card afterwards anyway).
   - `ResurfaceCard` widget: shows content preview + `daysAgoLabel`; actions **Keep** (dismisses card this session — `resurfaceDismissedProvider` flag in `resurface_providers.dart`), **Archive** (calls `setArchived(id, true)`), **Forget** (confirm dialog → `deleteNote(id)`).
 
 - [ ] **Step 1: Failing repo test**
@@ -1351,19 +1333,16 @@ void main() {
 ```dart
 import 'dart:math';
 
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/db/note_repo_provider.dart';
 import 'resurface_logic.dart';
 
-part 'resurface_providers.g.dart';
-
 /// One pick per app open (spec §6). One-shot query, not a stream:
 /// markResurfaced writes to the same rows a stream would watch, which
 /// would re-trigger the pick forever. autoDispose → fresh pick next open.
-@riverpod
-Future<Note?> resurfacePick(Ref ref) async {
+final resurfacePickProvider = FutureProvider.autoDispose<Note?>((ref) async {
   final candidates =
       await ref.watch(noteRepoProvider).resurfaceCandidates();
   if (candidates.isEmpty) return null;
@@ -1376,16 +1355,18 @@ Future<Note?> resurfacePick(Ref ref) async {
   );
   await ref.read(noteRepoProvider).markResurfaced(pick.id);
   return pick;
-}
+});
 
 /// Session flag: Keep hides the card until next app start.
-@riverpod
-class ResurfaceDismissed extends _$ResurfaceDismissed {
+class ResurfaceDismissed extends Notifier<bool> {
   @override
   bool build() => false;
 
   void dismiss() => state = true;
 }
+
+final resurfaceDismissedProvider =
+    NotifierProvider<ResurfaceDismissed, bool>(ResurfaceDismissed.new);
 ```
 
 `lib/features/resurface/ui/resurface_card.dart`:
@@ -1615,7 +1596,6 @@ void main() {
 - [ ] **Step 5: Full phase gate**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
 flutter test
 flutter analyze
 ```
@@ -1814,7 +1794,6 @@ Replace `insertNote` and `updateNote` bodies to delegate, and add privates:
 - [ ] **Step 5: Run all tests + analyze**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
 flutter test
 flutter analyze
 ```
@@ -1825,7 +1804,7 @@ Expected: green. Device: dump `learned #flutter today` → snackbar; note saved 
 
 **Files:**
 - Create: `lib/features/notes/ui/tag_chip.dart`
-- Modify: `lib/features/notes/notes_providers.dart` (filtered list)
+- Modify: `lib/features/notes/notes_provider.dart` (filtered list)
 - Modify: `lib/features/notes/ui/notes_list_screen.dart` (search field + filter chips)
 - Modify: `lib/core/db/note_repo.dart` (add `watchTags()`, filtered `watchNotes`)
 - Test: extend `test/features/notes/notes_list_screen_test.dart`
@@ -1834,9 +1813,9 @@ Expected: green. Device: dump `learned #flutter today` → snackbar; note saved 
 - Produces:
   - `TagChip` — small rounded chip, label only.
   - `NoteRepo.watchTags()` → `Stream<List<Tag>>`; `watchNotes({String? search, int? tagId})` — search = LIKE on content+title, tagId filters by link.
-  - `@riverpod Stream<List<Tag>> tags(Ref ref)` → `tagsProvider`
-  - `@riverpod class NotesFilter extends _$NotesFilter` → state `{String search; int? tagId}` (record or small class — use a record `(String, int?)` for simplicity), methods `setSearch`, `toggleTag`.
-  - `@riverpod Stream<List<Note>> filteredNotes(Ref ref)` → `filteredNotesProvider` (Notes list screen switches to this; the old `notesListProvider` from Task 5 is deleted — filtered with empty filter is the same query).
+  - `StreamProvider<List<Tag>> tagsProvider` (manual)
+  - `Notifier<NotesFilterState>` class + `notesFilterProvider` — state `{String search; int? tagId}` (record or small class — use a record `(String, int?)` for simplicity), methods `setSearch`, `toggleTag`.
+  - `StreamProvider<List<Note>> filteredNotesProvider` (Notes list screen switches to this; the old `noteListProvider` from Task 5 is deleted — filtered with empty filter is the same query).
 
 - [ ] **Step 1: Failing repo test** (append to `test/core/db/note_repo_test.dart`):
 
@@ -1968,23 +1947,21 @@ class TagChip extends StatelessWidget {
 }
 ```
 
-`lib/features/notes/notes_providers.dart` (full replacement):
+`lib/features/notes/notes_provider.dart` (full replacement):
 
 ```dart
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/db/note_repo_provider.dart';
 
-part 'notes_providers.g.dart';
-
-@riverpod
-Stream<List<Tag>> tags(Ref ref) => ref.watch(noteRepoProvider).watchTags();
+final tagsProvider = StreamProvider<List<Tag>>(
+  (ref) => ref.watch(noteRepoProvider).watchTags(),
+);
 
 typedef NotesFilterState = ({String search, int? tagId});
 
-@riverpod
-class NotesFilter extends _$NotesFilter {
+class NotesFilter extends Notifier<NotesFilterState> {
   @override
   NotesFilterState build() => (search: '', tagId: null);
 
@@ -1993,13 +1970,15 @@ class NotesFilter extends _$NotesFilter {
       state = (search: state.search, tagId: state.tagId == id ? null : id);
 }
 
-@riverpod
-Stream<List<Note>> filteredNotes(Ref ref) {
+final notesFilterProvider =
+    NotifierProvider<NotesFilter, NotesFilterState>(NotesFilter.new);
+
+final filteredNotesProvider = StreamProvider<List<Note>>((ref) {
   final filter = ref.watch(notesFilterProvider);
   return ref
       .watch(noteRepoProvider)
       .watchNotes(search: filter.search, tagId: filter.tagId);
-}
+});
 ```
 
 `lib/features/notes/ui/notes_list_screen.dart` (full replacement):
@@ -2010,7 +1989,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'note_card.dart';
 import 'tag_chip.dart';
-import '../notes_providers.dart';
+import '../notes_provider.dart';
 
 class NotesListScreen extends ConsumerWidget {
   const NotesListScreen({super.key});
@@ -2080,7 +2059,6 @@ class NotesListScreen extends ConsumerWidget {
 - [ ] **Step 5: Phase gate**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
 flutter test
 flutter analyze
 ```
@@ -2095,12 +2073,12 @@ flutter analyze
 - Modify: `lib/core/router/app_router.dart` (route `/notes/:id`)
 - Create: `lib/features/notes/ui/note_detail_screen.dart`
 - Modify: `lib/features/notes/ui/note_card.dart` (wire onTap)
-- Modify: `lib/features/notes/notes_providers.dart` (`noteByIdProvider`)
+- Modify: `lib/features/notes/notes_provider.dart` (`noteByIdProvider`)
 - Test: new `test/features/notes/note_detail_screen_test.dart` (detail body + tap-navigates)
 
 **Interfaces:**
 - Consumes: `NoteRepo.watchNote` (Task 4), `tagsForNote` (Task 9).
-- Produces: route `/notes/:id` → `NoteDetailScreen`; `@riverpod Stream<Note?> noteById(Ref ref, int id)` → family provider `noteByIdProvider(id)`; detail screen shows full content, tag chips (static), `daysAgoLabel(createdAt)`, and (Task 12) edit / archive / delete actions in the AppBar.
+  - `StreamProvider.autoDispose.family<Note?, int> noteByIdProvider` — family: one live stream per open note id, dropped when its listener leaves (autoDispose prevents unbounded per-note streams). Detail screen shows full content, tag chips (static), `daysAgoLabel(createdAt)`, and (Task 12) edit / archive / delete actions in the AppBar.
 
 - [ ] **Step 1: Failing test** (new file `test/features/notes/note_detail_screen_test.dart`):
 
@@ -2182,12 +2160,15 @@ void main() {
 
 - [ ] **Step 2: Implement**
 
-Add to `notes_providers.dart`:
+Add to `notes_provider.dart`:
 
 ```dart
-@riverpod
-Stream<Note?> noteById(Ref ref, int id) =>
-    ref.watch(noteRepoProvider).watchNote(id);
+/// autoDispose family: one stream per open note, dropped when the
+/// detail screen leaves — manual providers default to keepAlive, which
+/// would cache a stream for every note ever opened.
+final noteByIdProvider = StreamProvider.autoDispose.family<Note?, int>(
+  (ref, id) => ref.watch(noteRepoProvider).watchNote(id),
+);
 ```
 
 Add to `app_router.dart` inside the `/notes` branch routes (before closing bracket of that GoRoute's routes list — convert the notes branch route to use `routes:`):
@@ -2218,7 +2199,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/utils/date_format.dart';
 import '../../../core/db/database.dart';
-import '../notes_providers.dart';
+import '../notes_provider.dart';
 import 'tag_chip.dart';
 
 class NoteDetailScreen extends ConsumerWidget {
@@ -2296,10 +2277,9 @@ NoteCard(
 
 (`NoteCard` already accepts `onTap` from Task 6. `notes_list_screen.dart` needs `import 'package:go_router/go_router.dart';` for `context.push`.)
 
-- [ ] **Step 3: Run tests + analyze** (codegen for the family provider):
+- [ ] **Step 3: Run tests + analyze**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
 flutter test test/features/notes/
 flutter analyze
 ```
@@ -2407,7 +2387,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/db/note_repo_provider.dart';
 import '../data/tag_util.dart';
-import '../notes_providers.dart';
+import '../notes_provider.dart';
 import 'tag_chip.dart';
 
 class NoteEditScreen extends ConsumerStatefulWidget {
@@ -2544,7 +2524,6 @@ In `note_detail_screen.dart` AppBar actions (replacing the Task 11 comment):
 - [ ] **Step 3: Phase gate**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
 flutter test
 flutter analyze
 ```
@@ -2743,7 +2722,7 @@ Manual device pass: dump → detail → edit → archive → unarchive → delet
 
 **Interfaces:**
 - Consumes: `shared_preferences`.
-- Produces: `@riverpod class ThemeModeController extends _$ThemeModeController` — state `ThemeMode` (default `ThemeMode.dark`), `Future<void> set(ThemeMode)` persists `mode.name` under key `themeMode` in SharedPreferences; loads persisted value on build. `app.dart` switches `themeMode: ref.watch(themeModeControllerProvider)`. Settings screen: three-choice `SegmentedButton<ThemeMode>` (system / light / dark).
+- Produces: `ThemeModeController extends Notifier<ThemeMode>` + `themeModeControllerProvider` (manual) — state `ThemeMode` (default `ThemeMode.dark`), `Future<void> set(ThemeMode)` persists `mode.name` under key `themeMode` in SharedPreferences; loads persisted value on build. `app.dart` switches `themeMode: ref.watch(themeModeControllerProvider)`. Settings screen: three-choice `SegmentedButton<ThemeMode>` (system / light / dark).
 
 > **Learn:** `shared_preferences` = localStorage equivalent. In widget tests you must call `SharedPreferences.setMockInitialValues({})` first — that's Flutter's mocked-plugin pattern.
 
@@ -2809,13 +2788,10 @@ void main() {
 
 ```dart
 import 'package:flutter/material.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-part 'settings_providers.g.dart';
-
-@Riverpod(keepAlive: true)
-class ThemeModeController extends _$ThemeModeController {
+class ThemeModeController extends Notifier<ThemeMode> {
   bool _loadedFromDisk = false;
 
   @override
@@ -2842,6 +2818,9 @@ class ThemeModeController extends _$ThemeModeController {
     await sp.setString('themeMode', mode.name);
   }
 }
+
+final themeModeControllerProvider =
+    NotifierProvider<ThemeModeController, ThemeMode>(ThemeModeController.new);
 ```
 
 `lib/features/settings/ui/settings_screen.dart` (replace):
@@ -2912,7 +2891,6 @@ class RembrainApp extends ConsumerWidget {
 - [ ] **Step 3: Final gate**
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
 flutter test
 flutter analyze
 flutter run
@@ -2928,6 +2906,7 @@ Expected: everything green; on device, theme toggle persists across app restarts
 - **NoteEditScreen create mode cut** (spec §4 said "Create/Edit"): the dump box is the create path; a create-mode edit screen would duplicate it and had no wired entry point. `NoteEditScreen` is edit-only (`noteId` required). Restore create mode if a richer composer is ever needed.
 - **Settings "export stub" dropped** (spec §4): spec §2 already puts export out of scope; a dead button teaches nothing. Task 14 ships theme toggle only.
 - **Tag case normalization** (spec §3 said nothing about case): tags lowercased before storage — otherwise `#Dart` and `#dart` are two tags. Spec §6's parse rule made case-insensitive explicit here.
+- **2026-09-24 — riverpod_generator dropped, manual providers everywhere.** riverpod_generator cannot serialize types declared in *another generator's output* (drift's `Note` etc.) — build fails with `InvalidTypeException` on any provider signature mentioning a drift class. Upstream: duplicate of rrousselGit/riverpod#4323 (also #4289, #4363), maintainer: known limitation, **no fix planned**. The maintainer's suggested escape ("hand-declare the type") doesn't exist for drift — `Note extends DataClass` *is* drift's codegen. Consequence: all `@riverpod`/`@Riverpod` snippets rewritten to manual `Provider`/`StreamProvider`/`Notifier` + `XProvider` declarations; `riverpod_generator` + `riverpod_annotation` removed from deps; drift codegen untouched. Runtime (flutter_riverpod) unchanged. Semantic deltas: manual default is keepAlive where generated `@riverpod` was autoDispose — accepted for appDb/noteRepo/notesList/tags/filteredNotes/ThemeMode (single-screen local app, no churn cost); `noteById` (family) keeps autoDispose explicitly (unbounded per-note streams otherwise); `ResurfaceDismissed`/`NotesFilter` notifiers become keepAlive (fine: filter and dismiss flag *should* outlive navigation).
 
 ## Completion Checklist (maps to spec §10)
 

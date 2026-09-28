@@ -1,16 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:rembrain/features/ui/home_screen.dart';
 import 'package:rembrain/features/ui/notes_list_screen.dart';
 import 'package:rembrain/features/ui/settings_screen.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
-
-part 'app_router.g.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 
-@Riverpod(keepAlive: true)
-GoRouter appRouter(Ref ref) {
+final appRouterProvider = Provider((ref) {
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
     initialLocation: '/',
@@ -41,7 +38,7 @@ GoRouter appRouter(Ref ref) {
       ),
     ],
   );
-}
+});
 
 class ScaffoldWithNav extends StatelessWidget {
   const ScaffoldWithNav({super.key, required this.shell});
