@@ -62,4 +62,29 @@ class NoteRepo {
     );
     return (_db.select(_db.notes)..where((n) => n.id.equals(id))).getSingle();
   }
+
+  Future<List<Note>> resurfaceCandidates() async {
+    final lastResurfaced =
+        await (_db.select(_db.notes)
+              ..where(
+                (n) =>
+                    n.isArchived.equals(false) & n.lastResurfacedAt.isNotNull(),
+              )
+              ..orderBy([
+                (n) => OrderingTerm.desc(n.lastResurfacedAt),
+                (n) => OrderingTerm.desc(n.id),
+              ])
+              ..limit(1))
+            .getSingleOrNull();
+    final query = _db.select(_db.notes);
+    if (lastResurfaced == null) {
+      query.where((n) => n.isArchived.equals(false));
+    } else {
+      query.where(
+        (n) =>
+            n.isArchived.equals(false) & n.id.equals(lastResurfaced.id).not(),
+      );
+    }
+    return query.get();
+  }
 }
