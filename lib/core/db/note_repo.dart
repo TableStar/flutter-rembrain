@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 import 'package:rembrain/core/db/database.dart';
+import 'package:rembrain/features/notes/data/tag_util.dart';
 
 class NoteRepo {
   NoteRepo(this._db);
@@ -14,11 +15,14 @@ class NoteRepo {
         .watch();
   }
 
-  Future<Note> insertNote(String content, {String? title}) async {
-    final id = await _db
-        .into(_db.notes)
-        .insert(NotesCompanion.insert(content: content, title: Value(title)));
-    return (_db.select(_db.notes)..where((n) => n.id.equals(id))).getSingle();
+  Future<Note> insertNote(String content, {String? title}) {
+    return _db.transaction(() async {
+      final id = await _db
+          .into(_db.notes)
+          .insert(NotesCompanion.insert(content: content, title: Value(title)));
+      await _syncTags(id, content);
+      return (_db.select(_db.notes)..where((n) => n.id.equals(id))).getSingle();
+    });
   }
 
   Stream<Note?> watchNote(int id) {
@@ -28,13 +32,16 @@ class NoteRepo {
   }
 
   Future<void> updateNote(int id, {required String content, String? title}) {
-    return (_db.update(_db.notes)..where((n) => n.id.equals(id))).write(
-      NotesCompanion(
-        content: Value(content),
-        title: Value(title),
-        updatedAt: Value(DateTime.now()),
-      ),
-    );
+    return _db.transaction(() async {
+      await (_db.update(_db.notes)..where((n) => n.id.equals(id))).write(
+        NotesCompanion(
+          content: Value(content),
+          title: Value(title),
+          updatedAt: Value(DateTime.now()),
+        ),
+      );
+      await _syncTags(id, content);
+    });
   }
 
   Future<void> deleteNote(int id) {
@@ -86,5 +93,50 @@ class NoteRepo {
       );
     }
     return query.get();
+  }
+
+  Future<List<Tag>> tagsForNote(int noteId) {
+    final query = _db.select(_db.noteTags).join([
+      innerJoin(_db.tags, _db.tags.id.equalsExp(_db.noteTags.tagId)),
+    ])..where(_db.noteTags.noteId.equals(noteId));
+    return query.map((row) => row.readTable(_db.tags)).get();
+  }
+
+  Future<void> _syncTags(int noteId, String content) async {
+    final wanted = parseTags(content).toList()..sort();
+    final wantedIds = <int>[];
+
+    for (final name in wanted) {
+      final existing = await (_db.select(
+        _db.tags,
+      )..where((tbl) => tbl.name.equals(name))).getSingleOrNull();
+
+      final tagId =
+          existing?.id ??
+          await _db.into(_db.tags).insert(TagsCompanion.insert(name: name));
+      wantedIds.add(tagId);
+      await _db
+          .into(_db.noteTags)
+          .insert(
+            NoteTagsCompanion.insert(noteId: noteId, tagId: tagId),
+            mode: InsertMode.insertOrIgnore,
+          );
+    }
+
+    if (wanted.isEmpty) {
+      await (_db.delete(
+        _db.noteTags,
+      )..where((tbl) => tbl.noteId.equals(noteId))).go();
+    } else {
+      await (_db.delete(_db.noteTags)..where(
+            (tbl) => tbl.noteId.equals(noteId) & tbl.tagId.isNotIn(wantedIds),
+          ))
+          .go();
+    }
+
+    await _db.customUpdate(
+      "DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM note_tags)",
+      updates: {_db.tags},
+    );
   }
 }

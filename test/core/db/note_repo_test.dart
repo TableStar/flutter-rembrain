@@ -50,4 +50,39 @@ void main() {
     await repo.deleteNote(n.id);
     expect(await repo.watchNote(n.id).first, isNull);
   });
+
+  test('insertNote syncs tags from content', () async {
+    final n = await repo.insertNote('note about #Star and #madness');
+
+    final tags = await db.select(db.tags).get();
+    expect(tags.map((e) => e.name).toSet(), containsAll(["star", "madness"]));
+
+    final links = await db.select(db.noteTags).get();
+    expect(links, hasLength(2));
+
+    final linked = await repo.tagsForNote(n.id);
+    expect(linked.map((t) => t.name).toSet(), {'star', 'madness'});
+  });
+
+  test('updateNote re-syncs tags and prunes orphans', () async {
+    final n = await repo.insertNote('has #oldtag');
+    await repo.updateNote(n.id, content: 'now #newtag');
+
+    final tags = await db.select(db.tags).get();
+    expect(tags.map((t) => t.name), ['newtag']); // oldtag pruned
+
+    final linked = await repo.tagsForNote(n.id);
+    expect(linked.map((t) => t.name), ['newtag']);
+  });
+
+  test('shared tags survive one note editing them away', () async {
+    final a = await repo.insertNote('#shared here');
+    final b = await repo.insertNote('#shared also');
+    await repo.updateNote(a.id, content: 'no tag now');
+
+    final tags = await db.select(db.tags).get();
+    expect(tags.map((t) => t.name), ['shared']); // still used by b
+    expect((await repo.tagsForNote(b.id)).map((t) => t.name), ['shared']);
+    expect(await repo.tagsForNote(a.id), isEmpty);
+  });
 }
